@@ -233,13 +233,12 @@ where
         })
     }
 
-    pub async fn wait_for_block(&self, block_number: u64) -> eyre::Result<()> {
-        let block_number = block_number.into();
+    pub async fn wait_for_block(&self, block_number: u64) -> eyre::Result<(u64)> {
 
-        while self.provider.get_block_by_number(block_number).await?.is_none() {
+        while self.provider.get_block_by_number(block_number.into()).await?.is_none() {
             sleep(Duration::from_millis(100)).await;
         }
-        Ok(())
+        Ok(block_number)
     }
 }
 

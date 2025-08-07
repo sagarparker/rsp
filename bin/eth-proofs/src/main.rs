@@ -4,10 +4,9 @@ use alloy_provider::{Provider, ProviderBuilder, WsConnect};
 use clap::Parser;
 use cli::Args;
 use eth_proofs::EthProofsClient;
-use futures::{future::ready, StreamExt};
+use futures::StreamExt;
 use rsp_host_executor::{
-    alerting::AlertingClient, create_eth_block_execution_strategy_factory, BlockExecutor,
-    EthExecutorComponents, FullExecutor,
+    create_eth_block_execution_strategy_factory, BlockExecutor, EthExecutorComponents, FullExecutor,
 };
 use rsp_provider::create_provider;
 use sp1_sdk::{include_elf, ProverClient};
@@ -51,7 +50,6 @@ async fn main() -> eyre::Result<()> {
         args.eth_proofs_endpoint,
         args.eth_proofs_api_token,
     );
-    let alerting_client = args.pager_duty_integration_key.map(AlertingClient::new);
 
     let ws = WsConnect::new(args.ws_rpc_url);
     let ws_provider = ProviderBuilder::new().connect_ws(ws).await?;
@@ -59,8 +57,7 @@ async fn main() -> eyre::Result<()> {
 
     // Subscribe to block headers.
     let subscription = ws_provider.subscribe_blocks().await?;
-    let mut stream =
-        subscription.into_stream().filter(|h| ready(h.number % args.block_interval == 0));
+    let mut stream = subscription.into_stream();
 
     let builder = ProverClient::builder().cuda();
     let client = if let Some(endpoint) = &args.moongate_endpoint {
@@ -81,19 +78,22 @@ async fn main() -> eyre::Result<()> {
     )
     .await?;
 
-    info!("Latest block number: {}", http_provider.get_block_number().await?);
+    info!("Latest ETH block number: {}", http_provider.get_block_number().await?);
 
     while let Some(header) = stream.next().await {
-        // Wait for the block to be avaliable in the HTTP provider
-        executor.wait_for_block(header.number).await?;
+        // // Wait for the block to be avaliable in the HTTP provider
+        let block_number = executor.wait_for_block(header.number).await?;
+        info!("Processing block: {}", block_number);
+        let last_two_digits = format!("{:02}", block_number % 100);
 
+        info!("Last two digits of block number: {}", last_two_digits);
+        if last_two_digits != "00" {
+            info!("Skipping block {} as it does not end with '00'", block_number);
+            continue;
+        }
         if let Err(err) = executor.execute(header.number).await {
-            let error_message = format!("Error handling block {}: {err}", header.number);
+            let error_message = format!("Error handling block number {}: {err}", header.number);
             error!(error_message);
-
-            if let Some(alerting_client) = &alerting_client {
-                alerting_client.send_alert(error_message).await;
-            }
         }
     }
 

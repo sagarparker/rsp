@@ -6,7 +6,7 @@ use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use rsp_host_executor::ExecutionHooks;
 use sp1_sdk::{HashableKey, SP1VerifyingKey};
-use tracing::error;
+use tracing::{error, info};
 
 #[derive(Debug, Clone)]
 pub struct EthProofsClient {
@@ -18,7 +18,7 @@ pub struct EthProofsClient {
 
 impl EthProofsClient {
     pub fn new(cluster_id: u64, endpoint: String, api_token: String) -> Self {
-        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
+        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(1);
         let client = ClientBuilder::new(reqwest::Client::new())
             .with(RetryTransientMiddleware::new_with_policy(retry_policy))
             .build();
@@ -26,57 +26,57 @@ impl EthProofsClient {
         Self { cluster_id, endpoint, api_token, client }
     }
 
-    pub async fn queued(&self, block_number: u64) {
+    pub async fn queued(&self, block_number: u64) -> eyre::Result<()> {
         let json = serde_json::json!({
             "block_number": block_number,
             "cluster_id": self.cluster_id,
         });
 
+        info!("Reporting queued proof for block {}: {}", block_number, json);
+
         let this = self.clone();
 
-        // Spawn another task to avoid retries to impact block execution
-        tokio::spawn(async move {
-            let response = this
-                .client
-                .post(format!("{}/proofs/queued", this.endpoint))
-                .header("Content-Type", "application/json")
-                .header("Authorization", format!("Bearer {}", this.api_token))
-                .json(&json)
-                .send()
-                .await
-                .map_err(|e| eyre!(e))
-                .and_then(|r| r.error_for_status().map_err(|e| eyre!(e)));
+        let response = this
+            .client
+            .post(format!("{}/proofs/queued", this.endpoint))
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", this.api_token))
+            .json(&json)
+            .send()
+            .await
+            .map_err(|e| eyre!(e))
+            .and_then(|r| r.error_for_status().map_err(|e| eyre!(e)));
 
-            if let Err(err) = response {
-                error!("Failed to report proof queuing: {}", err)
-            }
-        });
+        if let Err(ref err) = response {
+            error!("Failed to report proof queuing: {}", err);
+        }
+
+        response.map(|_| ())
     }
 
-    pub async fn proving(&self, block_number: u64) {
+    pub async fn proving(&self, block_number: u64) -> eyre::Result<()> {
         let json = serde_json::json!({
             "block_number": block_number,
             "cluster_id": self.cluster_id,
         });
         let this = self.clone();
 
-        // Spawn another task to avoid retries to impact block execution
-        tokio::spawn(async move {
-            let response = this
-                .client
-                .post(format!("{}/proofs/proving", this.endpoint))
-                .header("Content-Type", "application/json")
-                .header("Authorization", format!("Bearer {}", this.api_token))
-                .json(&json)
-                .send()
-                .await
-                .map_err(|e| eyre!(e))
-                .and_then(|r| r.error_for_status().map_err(|e| eyre!(e)));
+        let response = this
+            .client
+            .post(format!("{}/proofs/proving", this.endpoint))
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", this.api_token))
+            .json(&json)
+            .send()
+            .await
+            .map_err(|e| eyre!(e))
+            .and_then(|r| r.error_for_status().map_err(|e| eyre!(e)));
 
-            if let Err(err) = response {
-                error!("Failed to report proof proving: {}", err)
-            }
-        });
+        if let Err(ref err) = response {
+            error!("Failed to report proof proving: {}", err);
+        }
+
+        response.map(|_| ())
     }
 
     pub async fn proved(
@@ -86,7 +86,7 @@ impl EthProofsClient {
         cycle_count: u64,
         elapsed: f32,
         vk: &SP1VerifyingKey,
-    ) {
+    ) -> eyre::Result<()> {
         let json = serde_json::json!({
             "proof": STANDARD.encode(proof_bytes),
             "block_number": block_number,
@@ -96,39 +96,38 @@ impl EthProofsClient {
             "cluster_id": self.cluster_id,
         });
 
+        info!(
+            "Reporting proof for block {}: proving cycles {} proof generation time {}",
+            block_number, json["proving_cycles"], json["proving_time"]
+        );
+
         let this = self.clone();
 
-        // Spawn another task to avoid retries to impact block execution
-        tokio::spawn(async move {
-            // Submit proof to the API
+        let response = this
+            .client
+            .post(format!("{}/proofs/proved", this.endpoint))
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", this.api_token))
+            .json(&json)
+            .send()
+            .await?.text().await?;
 
-            let response = this
-                .client
-                .post(format!("{}/proofs/proved", this.endpoint))
-                .header("Content-Type", "application/json")
-                .header("Authorization", format!("Bearer {}", this.api_token))
-                .json(&json)
-                .send()
-                .await
-                .map_err(|e| eyre!(e))
-                .and_then(|r| r.error_for_status().map_err(|e| eyre!(e)));
 
-            if let Err(err) = response {
-                error!("Failed to report proof proving: {}", err)
-            }
-        });
+        info!("Response from proving endpoint: {:?}", response);
+
+        Ok(())
     }
 }
 
 impl ExecutionHooks for EthProofsClient {
     async fn on_execution_start(&self, block_number: u64) -> eyre::Result<()> {
-        self.queued(block_number).await;
+        self.queued(block_number).await?;
 
         Ok(())
     }
 
     async fn on_proving_start(&self, block_number: u64) -> eyre::Result<()> {
-        self.proving(block_number).await;
+        self.proving(block_number).await?;
 
         Ok(())
     }
@@ -148,7 +147,7 @@ impl ExecutionHooks for EthProofsClient {
             proving_duration.as_secs_f32(),
             vk,
         )
-        .await;
+        .await?;
 
         Ok(())
     }

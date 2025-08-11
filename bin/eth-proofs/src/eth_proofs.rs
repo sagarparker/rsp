@@ -130,7 +130,8 @@ impl EthProofsClient {
             "block_number": block_number,
             "proof_time": (elapsed * 1000.0) as u64,
             "cycles": cycle_count,
-            "response": response
+            "response": response,
+            "epoch_time": chrono::Utc::now().timestamp()
         });
         let supabase_response = this.client
             .post(&supabase_url)
@@ -143,7 +144,6 @@ impl EthProofsClient {
             .await?
             .text()
             .await?;
-        info!("Response from Supabase eth_proofs endpoint: {:?}", supabase_response);
 
         Ok(())
     }

@@ -133,7 +133,8 @@ impl EthProofsClient {
             "response": response,
             "epoch_time": chrono::Utc::now().timestamp()
         });
-        let supabase_response = this.client
+        
+        this.client
             .post(&supabase_url)
             .header("apikey", &supabase_api_key)
             .header("Authorization", &supabase_auth)

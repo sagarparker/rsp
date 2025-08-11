@@ -1,11 +1,13 @@
 use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD, Engine};
+use dotenv::dotenv;
 use eyre::eyre;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use rsp_host_executor::ExecutionHooks;
 use sp1_sdk::{HashableKey, SP1VerifyingKey};
+use std::env;
 use tracing::{error, info};
 
 #[derive(Debug, Clone)]
@@ -110,10 +112,38 @@ impl EthProofsClient {
             .header("Authorization", format!("Bearer {}", this.api_token))
             .json(&json)
             .send()
-            .await?.text().await?;
+            .await?
+            .text()
+            .await?;
 
+        info!(
+            "Response from proving endpoint: {:?}",
+            response
+        );
 
-        info!("Response from proving endpoint: {:?}", response);
+        // Load environment variables (if not already loaded)
+        dotenv().ok();
+        let supabase_url = env::var("SUPABASE_URL").expect("SUPABASE_URL not set in .env");
+        let supabase_api_key = env::var("SUPABASE_API_KEY").expect("SUPABASE_API_KEY not set in .env");
+        let supabase_auth = format!("Bearer {}", supabase_api_key);
+        let supabase_json = serde_json::json!({
+            "block_number": block_number,
+            "proof_time": (elapsed * 1000.0) as u64,
+            "cycles": cycle_count,
+            "response": response
+        });
+        let supabase_response = this.client
+            .post(&supabase_url)
+            .header("apikey", &supabase_api_key)
+            .header("Authorization", &supabase_auth)
+            .header("Content-Type", "application/json")
+            .header("Prefer", "return=minimal")
+            .json(&supabase_json)
+            .send()
+            .await?
+            .text()
+            .await?;
+        info!("Response from Supabase eth_proofs endpoint: {:?}", supabase_response);
 
         Ok(())
     }
